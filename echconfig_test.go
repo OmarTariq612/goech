@@ -154,7 +154,8 @@ func TestECHConfigListMarshalBinary(t *testing.T) {
 			},
 			MaxNameLength: 0,
 			RawPublicName: []byte("example.com"),
-			RawExtensions: nil},
+			RawExtensions: nil,
+		},
 
 		ECHConfig{
 			Version:   DraftTLSESNI16,
@@ -166,7 +167,8 @@ func TestECHConfigListMarshalBinary(t *testing.T) {
 			},
 			MaxNameLength: 0,
 			RawPublicName: []byte("example.org"),
-			RawExtensions: nil},
+			RawExtensions: nil,
+		},
 	}
 
 	bytes1, err := configList.MarshalBinary()

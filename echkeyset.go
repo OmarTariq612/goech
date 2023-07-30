@@ -35,7 +35,7 @@ func (key *ECHKeySet) Equal(other *ECHKeySet) bool {
 		return false
 	}
 
-	return bytes.Equal(privateKey, otherPrivateKey) && key.ECHConfig.Equal(&other.ECHConfig)
+	return key.ECHConfig.Equal(&other.ECHConfig) && bytes.Equal(privateKey, otherPrivateKey)
 }
 
 var (

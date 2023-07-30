@@ -57,7 +57,7 @@ func (ech *ECHConfig) Equal(other *ECHConfig) bool {
 		}
 	}
 
-	return bytes.Equal(echPublicKey, otherPublicKey) && ech.Version == other.Version && ech.ConfigID == other.ConfigID && bytes.Equal(ech.RawPublicName, other.RawPublicName) && ech.MaxNameLength == other.MaxNameLength && bytes.Equal(ech.RawExtensions, other.RawExtensions)
+	return ech.Version == other.Version && ech.ConfigID == other.ConfigID && ech.MaxNameLength == other.MaxNameLength && bytes.Equal(ech.RawPublicName, other.RawPublicName) && bytes.Equal(echPublicKey, otherPublicKey) && bytes.Equal(ech.RawExtensions, other.RawExtensions)
 }
 
 var (
