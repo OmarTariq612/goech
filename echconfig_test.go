@@ -50,7 +50,7 @@ func TestECHConfigEqual(t *testing.T) {
 		PublicKey:     publicKey,
 		CipherSuites:  allHpkeSymmetricCipherSuite,
 		MaxNameLength: 0,
-		RawExtensions: nil,
+		RawExtensions: []byte{},
 	}
 
 	if !one.Equal(&two) {
@@ -192,5 +192,36 @@ func TestECHConfigListMarshalBinary(t *testing.T) {
 
 	if !bytes.Equal(bytes1, bytes2) {
 		t.Fatal("bytes aren't equal")
+	}
+}
+
+func TestUnmarshalECHConfigList(t *testing.T) {
+	publicKey1, _, err := GenerateKeyPair(hpke.KEM_P256_HKDF_SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	publicKey2, _, err := GenerateKeyPair(hpke.KEM_P521_HKDF_SHA512)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	list := ECHConfigList{
+		{RawPublicName: []byte("one.example.com"), PublicKey: publicKey1, Version: DraftTLSESNI16, KEM: hpke.KEM_P256_HKDF_SHA256, RawExtensions: []byte{1, 2, 3}},
+		{RawPublicName: []byte("two.example.com"), PublicKey: publicKey2, Version: DraftTLSESNI16, KEM: hpke.KEM_P521_HKDF_SHA512, RawExtensions: []byte{4, 5, 6}},
+	}
+
+	rawList, err := list.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unmarshaledList, err := UnmarshalECHConfigList(rawList)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !list.Equal(unmarshaledList) {
+		t.Fatal("unmarshaled list doesn't equal the original one")
 	}
 }

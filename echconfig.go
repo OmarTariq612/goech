@@ -71,7 +71,7 @@ func (ech ECHConfig) marshalBinaryOnlyConfig(b *cryptobyte.Builder) error {
 		return err
 	}
 	if l := len(ech.RawPublicName); l == 0 || l > 255 {
-		return fmt.Errorf("ERR: (len = %d) -> public name length must be 0 < len < 255", l)
+		return InvalidPublicNameLenError(l)
 	}
 
 	b.AddUint16(ech.Version)
@@ -119,11 +119,15 @@ func (ech *ECHConfig) unmarshalBinaryConfigOnly(data []byte) error {
 	var content cryptobyte.String
 	b := cryptobyte.String(data)
 
-	if !b.ReadUint16(&ech.Version) || ech.Version != DraftTLSESNI16 {
-		return fmt.Errorf("ERR: invalid ECHConfig")
+	if !b.ReadUint16(&ech.Version) {
+		return ErrInvalidLen
 	}
+	if ech.Version != DraftTLSESNI16 {
+		return ErrNotSupportedVersion
+	}
+
 	if !b.ReadUint16LengthPrefixed(&content) || !b.Empty() {
-		return fmt.Errorf("ERR: parsing ECHConfig")
+		return ErrInvalidLen
 	}
 
 	var t cryptobyte.String
@@ -131,31 +135,35 @@ func (ech *ECHConfig) unmarshalBinaryConfigOnly(data []byte) error {
 
 	if !content.ReadUint8(&ech.ConfigID) ||
 		!content.ReadUint16((*uint16)(&ech.KEM)) ||
-		!ech.KEM.IsValid() ||
 		!content.ReadUint16LengthPrefixed(&t) ||
 		!t.ReadBytes(&pk, len(t)) ||
 		!content.ReadUint16LengthPrefixed(&t) ||
-		len(t)%4 != 0 {
-		return fmt.Errorf("ERR: parsing ECHConfigContents")
+		len(t)%4 != 0 { // the length of (KDFs and AEADs) must be divisible by 4
+		return ErrInvalidLen
+	}
+
+	if !ech.KEM.IsValid() {
+		return InvalidKEMError(ech.KEM)
 	}
 
 	var err error
 	if ech.PublicKey, err = ech.KEM.Scheme().UnmarshalBinaryPublicKey(pk); err != nil {
-		return fmt.Errorf("ERR: parsing public_key: %w", err)
+		return fmt.Errorf("parsing public_key: %w", err)
 	}
 
-	ech.CipherSuites = nil
+	ech.CipherSuites = nil // each time you unmarshal you allocate a new CipherSuites
 
 	for !t.Empty() {
 		var hpkeKDF, hpkeAEAD uint16
 		if !t.ReadUint16(&hpkeKDF) || !t.ReadUint16(&hpkeAEAD) {
+			// we have already checked that the length is divisible by 4
 			panic("this must not happen")
 		}
 		if !hpke.KDF(hpkeKDF).IsValid() {
-			return fmt.Errorf("ERR: invalid kdf id: %d", hpkeKDF)
+			return InvalidKDFError(hpkeKDF)
 		}
 		if !hpke.AEAD(hpkeAEAD).IsValid() {
-			return fmt.Errorf("ERR: invalid aead id: %d", hpkeKDF)
+			return InvalidAEADError(hpkeAEAD)
 		}
 		ech.CipherSuites = append(ech.CipherSuites, HpkeSymmetricCipherSuite{KDF: hpke.KDF(hpkeKDF), AEAD: hpke.AEAD(hpkeAEAD)})
 	}
@@ -166,7 +174,7 @@ func (ech *ECHConfig) unmarshalBinaryConfigOnly(data []byte) error {
 		!content.ReadUint16LengthPrefixed(&t) ||
 		!t.ReadBytes(&ech.RawExtensions, len(t)) ||
 		!content.Empty() {
-		return fmt.Errorf("ERR: parsing ECHConfigContents")
+		return ErrInvalidLen
 	}
 
 	return nil
@@ -177,7 +185,7 @@ func (ech *ECHConfig) UnmarshalBinary(data []byte) error {
 
 	var t cryptobyte.String
 	if !b.ReadUint16LengthPrefixed(&t) || !b.Empty() {
-		return fmt.Errorf("ERR: invalid ECHConfig")
+		return ErrInvalidLen
 	}
 
 	return ech.unmarshalBinaryConfigOnly(t)
@@ -224,7 +232,7 @@ func (configs ECHConfigList) MarshalBinary() ([]byte, error) {
 }
 
 func (configs *ECHConfigList) UnmarshalBinary(data []byte) error {
-	*configs = (*configs)[:0]
+	*configs = (*configs)[:0] // here we are using the cap only, if there was a previous list, Unmarshal is gonna write over it
 	var (
 		err    error
 		config ECHConfig
@@ -232,23 +240,23 @@ func (configs *ECHConfigList) UnmarshalBinary(data []byte) error {
 	)
 	s := cryptobyte.String(data)
 	if !s.ReadUint16LengthPrefixed(&t) || !s.Empty() {
-		return fmt.Errorf("ERR: parsing ECHConfigList")
+		return ErrInvalidLen
 	}
 
 	for !t.Empty() {
 		if len(t) < 4 {
-			return fmt.Errorf("ERR: invalid ECHConfigList")
+			return ErrInvalidLen
 		}
 		length := int(binary.BigEndian.Uint16(t[2:4]))
 		if len(t) < length+4 {
-			return fmt.Errorf("ERR: invalid ECHConfigList")
+			return ErrInvalidLen
 		}
 		err = config.unmarshalBinaryConfigOnly(t[:length+4])
 		if err != nil {
 			return err
 		}
 		if !t.Skip(length + 4) {
-			return fmt.Errorf("ERR: parsing ECHConfigList")
+			return ErrInvalidLen
 		}
 
 		*configs = append(*configs, config)
@@ -312,10 +320,9 @@ func MarshalECHConfigArgs(configs ...ECHConfig) ([]byte, error) {
 	return MarshalECHConfigList(configs)
 }
 
-func UnmarshalECHConfigList(data []byte) (ECHConfigList, error) {
-	c := ECHConfigList{}
-	err := c.UnmarshalBinary(data)
-	return c, err
+func UnmarshalECHConfigList(data []byte) (configList ECHConfigList, err error) {
+	err = configList.UnmarshalBinary(data)
+	return configList, err
 }
 
 func ECHConfigListFromBase64(echConfigListBase64 string) (ECHConfigList, error) {

@@ -5,7 +5,6 @@ import (
 	"encoding"
 	"encoding/base64"
 	"encoding/binary"
-	"fmt"
 
 	"github.com/cloudflare/circl/hpke"
 	"github.com/cloudflare/circl/kem"
@@ -76,7 +75,8 @@ func (key *ECHKeySet) UnmarshalBinary(data []byte) error {
 		sk, config cryptobyte.String
 	)
 	if !s.ReadUint16LengthPrefixed(&sk) || !s.ReadUint16LengthPrefixed(&config) || !s.Empty() {
-		return fmt.Errorf("error parsing key")
+		// return fmt.Errorf("error parsing key")
+		return ErrInvalidLen
 	}
 
 	var err error
@@ -149,21 +149,21 @@ func (keysets *ECHKeySetList) UnmarshalBinary(data []byte) error {
 
 	for !s.Empty() {
 		if len(s) < 2 {
-			return fmt.Errorf("ERR: invalid ECHKeySetList")
+			return ErrInvalidLen
 		}
 		keyLength := int(binary.BigEndian.Uint16(s[:2]))
 		if len(s) < keyLength+4 {
-			return fmt.Errorf("ERR: invalid ECHKeySetList")
+			return ErrInvalidLen
 		}
 		configLength := int(binary.BigEndian.Uint16(s[keyLength+2 : keyLength+4]))
 		if len(s) < 2+keyLength+2+configLength {
-			return fmt.Errorf("ERR: invalid ECHKeySetList")
+			return ErrInvalidLen
 		}
 		if err := keyset.UnmarshalBinary(s[:2+keyLength+2+configLength]); err != nil {
 			return err
 		}
 		if !s.Skip(2 + keyLength + 2 + configLength) {
-			return fmt.Errorf("ERR: invalid ECHKeySetList")
+			return ErrInvalidLen
 		}
 		*keysets = append(*keysets, keyset)
 	}
