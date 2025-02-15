@@ -61,11 +61,12 @@ func (ech *ECHConfig) Equal(other *ECHConfig) bool {
 }
 
 var (
-	_ encoding.BinaryMarshaler   = ECHConfig{}
+	_ encoding.BinaryMarshaler = ECHConfig{}
+	// _ encoding.BinaryAppender    = ECHConfig{}
 	_ encoding.BinaryUnmarshaler = (*ECHConfig)(nil)
 )
 
-func (ech ECHConfig) marshalBinaryOnlyConfig(b *cryptobyte.Builder) error {
+func (ech ECHConfig) marshalBinaryImpl(b *cryptobyte.Builder) error {
 	pk, err := ech.PublicKey.MarshalBinary()
 	if err != nil {
 		return err
@@ -100,22 +101,24 @@ func (ech ECHConfig) marshalBinaryOnlyConfig(b *cryptobyte.Builder) error {
 }
 
 func (ech ECHConfig) MarshalBinary() ([]byte, error) {
-	var (
-		b   cryptobyte.Builder
-		err error
-	)
-	b.AddUint16LengthPrefixed(func(child *cryptobyte.Builder) {
-		err = ech.marshalBinaryOnlyConfig(child)
-	})
+	var b cryptobyte.Builder
 
-	if err != nil {
+	if err := ech.marshalBinaryImpl(&b); err != nil {
 		return nil, err
 	}
 
 	return b.Bytes()
 }
 
-func (ech *ECHConfig) unmarshalBinaryConfigOnly(data []byte) error {
+func (ech ECHConfig) AppendBinary(b []byte) ([]byte, error) {
+	cbb := cryptobyte.NewBuilder(b)
+	if err := ech.marshalBinaryImpl(cbb); err != nil {
+		return nil, err
+	}
+	return cbb.Bytes()
+}
+
+func (ech *ECHConfig) unmarshalBinaryImpl(data []byte) error {
 	var content cryptobyte.String
 	b := cryptobyte.String(data)
 
@@ -138,7 +141,7 @@ func (ech *ECHConfig) unmarshalBinaryConfigOnly(data []byte) error {
 		!content.ReadUint16LengthPrefixed(&t) ||
 		!t.ReadBytes(&pk, len(t)) ||
 		!content.ReadUint16LengthPrefixed(&t) ||
-		len(t)%4 != 0 { // the length of (KDFs and AEADs) must be divisible by 4
+		len(t)%4 != 0 /* the length of (KDFs and AEADs) must be divisible by 4 */ {
 		return ErrInvalidLen
 	}
 
@@ -151,7 +154,7 @@ func (ech *ECHConfig) unmarshalBinaryConfigOnly(data []byte) error {
 		return fmt.Errorf("parsing public_key: %w", err)
 	}
 
-	ech.CipherSuites = nil // each time you unmarshal you allocate a new CipherSuites
+	ech.CipherSuites = ech.CipherSuites[:0]
 
 	for !t.Empty() {
 		var hpkeKDF, hpkeAEAD uint16
@@ -181,14 +184,31 @@ func (ech *ECHConfig) unmarshalBinaryConfigOnly(data []byte) error {
 }
 
 func (ech *ECHConfig) UnmarshalBinary(data []byte) error {
-	b := cryptobyte.String(data)
+	return ech.unmarshalBinaryImpl(data)
+}
 
-	var t cryptobyte.String
-	if !b.ReadUint16LengthPrefixed(&t) || !b.Empty() {
-		return ErrInvalidLen
+func (ech ECHConfig) ToBase64() (string, error) {
+	data, err := ech.MarshalBinary()
+	if err != nil {
+		return "", nil
 	}
+	return base64.StdEncoding.EncodeToString(data), nil
+}
 
-	return ech.unmarshalBinaryConfigOnly(t)
+func (ech ECHConfig) ToBase64OrPanic() string {
+	echConfigBase64, err := ech.ToBase64()
+	if err != nil {
+		panic(err)
+	}
+	return echConfigBase64
+}
+
+func (ech *ECHConfig) FromBase64(echConfigBase64 string) error {
+	data, err := base64.StdEncoding.DecodeString(echConfigBase64)
+	if err != nil {
+		return err
+	}
+	return ech.UnmarshalBinary(data)
 }
 
 type ECHConfigList []ECHConfig
@@ -206,7 +226,8 @@ func (configs ECHConfigList) Equal(other ECHConfigList) bool {
 }
 
 var (
-	_ encoding.BinaryMarshaler   = (ECHConfigList)(nil)
+	_ encoding.BinaryMarshaler = (ECHConfigList)(nil)
+	// _ encoding.BinaryAppender    = (ECHConfigList)(nil)
 	_ encoding.BinaryUnmarshaler = (*ECHConfigList)(nil)
 )
 
@@ -215,9 +236,10 @@ func (configs ECHConfigList) MarshalBinary() ([]byte, error) {
 		b   cryptobyte.Builder
 		err error
 	)
+
 	b.AddUint16LengthPrefixed(func(child *cryptobyte.Builder) {
 		for _, echConfig := range configs {
-			err = echConfig.marshalBinaryOnlyConfig(child)
+			err = echConfig.marshalBinaryImpl(child)
 			if err != nil {
 				break
 			}
@@ -231,12 +253,32 @@ func (configs ECHConfigList) MarshalBinary() ([]byte, error) {
 	return b.Bytes()
 }
 
+func (configs ECHConfigList) AppendBinary(b []byte) ([]byte, error) {
+	cbb := cryptobyte.NewBuilder(b)
+
+	var err error
+
+	cbb.AddUint16LengthPrefixed(func(child *cryptobyte.Builder) {
+		for _, echConfig := range configs {
+			err = echConfig.marshalBinaryImpl(child)
+			if err != nil {
+				break
+			}
+		}
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return cbb.Bytes()
+}
+
 func (configs *ECHConfigList) UnmarshalBinary(data []byte) error {
 	*configs = (*configs)[:0] // here we are using the cap only, if there was a previous list, Unmarshal is gonna write over it
 	var (
-		err    error
-		config ECHConfig
-		t      cryptobyte.String
+		err error
+		t   cryptobyte.String
 	)
 	s := cryptobyte.String(data)
 	if !s.ReadUint16LengthPrefixed(&t) || !s.Empty() {
@@ -251,7 +293,8 @@ func (configs *ECHConfigList) UnmarshalBinary(data []byte) error {
 		if len(t) < length+4 {
 			return ErrInvalidLen
 		}
-		err = config.unmarshalBinaryConfigOnly(t[:length+4])
+		var config ECHConfig
+		err = config.UnmarshalBinary(t[:length+4])
 		if err != nil {
 			return err
 		}
@@ -286,30 +329,6 @@ func (configs *ECHConfigList) FromBase64(echConfigListBase64 string) error {
 		return err
 	}
 	return configs.UnmarshalBinary(data)
-}
-
-func (ech ECHConfig) ToBase64() (string, error) {
-	data, err := ech.MarshalBinary()
-	if err != nil {
-		return "", nil
-	}
-	return base64.StdEncoding.EncodeToString(data), nil
-}
-
-func (ech ECHConfig) ToBase64OrPanic() string {
-	echConfigBase64, err := ech.ToBase64()
-	if err != nil {
-		panic(err)
-	}
-	return echConfigBase64
-}
-
-func (ech *ECHConfig) FromBase64(echConfigBase64 string) error {
-	data, err := base64.StdEncoding.DecodeString(echConfigBase64)
-	if err != nil {
-		return err
-	}
-	return ech.UnmarshalBinary(data)
 }
 
 func MarshalECHConfigList(configs []ECHConfig) ([]byte, error) {

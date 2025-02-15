@@ -20,7 +20,7 @@ type ECHKeySet struct {
 	ECHConfig  ECHConfig
 }
 
-func (key *ECHKeySet) String() string {
+func (key ECHKeySet) String() string {
 	return key.ECHConfig.String()
 }
 
@@ -38,16 +38,17 @@ func (key *ECHKeySet) Equal(other *ECHKeySet) bool {
 }
 
 var (
-	_ encoding.BinaryMarshaler   = (*ECHKeySet)(nil)
+	_ encoding.BinaryMarshaler = ECHKeySet{}
+	// _ encoding.BinaryAppender    = ECHKeySet{}
 	_ encoding.BinaryUnmarshaler = (*ECHKeySet)(nil)
 )
 
-func (key *ECHKeySet) marchalBinary(b *cryptobyte.Builder) error {
+func (key ECHKeySet) marshalBinaryImpl(b *cryptobyte.Builder) error {
 	sk, err := key.PrivateKey.MarshalBinary()
 	if err != nil {
 		return err
 	}
-	// length + config
+
 	configBytes, err := key.ECHConfig.MarshalBinary()
 	if err != nil {
 		return err
@@ -55,18 +56,27 @@ func (key *ECHKeySet) marchalBinary(b *cryptobyte.Builder) error {
 
 	b.AddUint16(uint16(len(sk)))
 	b.AddBytes(sk)
+	b.AddUint16(uint16(len(configBytes)))
 	b.AddBytes(configBytes)
 
 	return nil
 }
 
 // len -  privatekey - len - config
-func (key *ECHKeySet) MarshalBinary() ([]byte, error) {
+func (key ECHKeySet) MarshalBinary() ([]byte, error) {
 	var b cryptobyte.Builder
-	if err := key.marchalBinary(&b); err != nil {
+	if err := key.marshalBinaryImpl(&b); err != nil {
 		return nil, err
 	}
 	return b.Bytes()
+}
+
+func (key ECHKeySet) AppendBinary(b []byte) ([]byte, error) {
+	cbb := cryptobyte.NewBuilder(b)
+	if err := key.marshalBinaryImpl(cbb); err != nil {
+		return nil, err
+	}
+	return cbb.Bytes()
 }
 
 func (key *ECHKeySet) UnmarshalBinary(data []byte) error {
@@ -75,12 +85,11 @@ func (key *ECHKeySet) UnmarshalBinary(data []byte) error {
 		sk, config cryptobyte.String
 	)
 	if !s.ReadUint16LengthPrefixed(&sk) || !s.ReadUint16LengthPrefixed(&config) || !s.Empty() {
-		// return fmt.Errorf("error parsing key")
 		return ErrInvalidLen
 	}
 
 	var err error
-	if err = key.ECHConfig.unmarshalBinaryConfigOnly(config); err != nil {
+	if err = key.ECHConfig.unmarshalBinaryImpl(config); err != nil {
 		return err
 	}
 	key.PrivateKey, err = key.ECHConfig.KEM.Scheme().UnmarshalBinaryPrivateKey(sk)
@@ -127,18 +136,29 @@ func (keysets ECHKeySetList) Equal(other ECHKeySetList) bool {
 }
 
 var (
-	_ encoding.BinaryMarshaler   = (ECHKeySetList)(nil)
+	_ encoding.BinaryMarshaler = (ECHKeySetList)(nil)
+	// _ encoding.BinaryAppender    = (ECHKeySetList)(nil)
 	_ encoding.BinaryUnmarshaler = (*ECHConfigList)(nil)
 )
 
 func (keysets ECHKeySetList) MarshalBinary() ([]byte, error) {
 	var b cryptobyte.Builder
 	for _, keySet := range keysets {
-		if err := keySet.marchalBinary(&b); err != nil {
+		if err := keySet.marshalBinaryImpl(&b); err != nil {
 			return nil, err
 		}
 	}
 	return b.Bytes()
+}
+
+func (keysets ECHKeySetList) AppendBinary(b []byte) ([]byte, error) {
+	cbb := cryptobyte.NewBuilder(b)
+	for _, keySet := range keysets {
+		if err := keySet.marshalBinaryImpl(cbb); err != nil {
+			return nil, err
+		}
+	}
+	return cbb.Bytes()
 }
 
 func (keysets *ECHKeySetList) UnmarshalBinary(data []byte) error {
@@ -217,13 +237,17 @@ func ECHKeySetListFromBase64(echKeySetListBase64 string) (ECHKeySetList, error) 
 	return UnmarshalECHKeySetList(data)
 }
 
-func GenerateECHKeySet(configID uint8, domain string, kem hpke.KEM) (*ECHKeySet, error) {
+func GenerateECHKeySet(configID uint8, domain string, kem hpke.KEM, cipherSuites []HpkeSymmetricCipherSuite) (ECHKeySet, error) {
 	publicKey, privateKey, err := GenerateKeyPair(kem)
 	if err != nil {
-		return nil, err
+		return ECHKeySet{}, err
 	}
 
-	return &ECHKeySet{
+	if cipherSuites == nil {
+		cipherSuites = allHpkeSymmetricCipherSuite
+	}
+
+	return ECHKeySet{
 		PrivateKey: privateKey,
 		ECHConfig: ECHConfig{
 			PublicKey:     publicKey,
@@ -231,7 +255,7 @@ func GenerateECHKeySet(configID uint8, domain string, kem hpke.KEM) (*ECHKeySet,
 			ConfigID:      configID,
 			RawPublicName: []byte(domain),
 			KEM:           kem,
-			CipherSuites:  allHpkeSymmetricCipherSuite,
+			CipherSuites:  cipherSuites,
 			MaxNameLength: 0,
 			RawExtensions: nil,
 		},

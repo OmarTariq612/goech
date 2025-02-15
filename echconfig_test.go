@@ -2,17 +2,27 @@ package goech
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"fmt"
 	"log"
+	"math/big"
+	"net"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/cloudflare/circl/hpke"
 	"github.com/cloudflare/circl/kem"
-	"golang.org/x/crypto/cryptobyte"
 )
 
 const (
-	kemConst = hpke.KEM_P256_HKDF_SHA256
+	kemConst = hpke.KEM_X25519_HKDF_SHA256
 )
 
 var (
@@ -35,7 +45,7 @@ func TestECHConfigEqual(t *testing.T) {
 		Version:       DraftTLSESNI16,
 		ConfigID:      1,
 		RawPublicName: []byte("example.com"),
-		KEM:           hpke.KEM_P256_HKDF_SHA256,
+		KEM:           kemConst,
 		PublicKey:     publicKey,
 		CipherSuites:  allHpkeSymmetricCipherSuite,
 		MaxNameLength: 0,
@@ -46,7 +56,7 @@ func TestECHConfigEqual(t *testing.T) {
 		Version:       DraftTLSESNI16,
 		ConfigID:      1,
 		RawPublicName: []byte("example.com"),
-		KEM:           hpke.KEM_P256_HKDF_SHA256,
+		KEM:           kemConst,
 		PublicKey:     publicKey,
 		CipherSuites:  allHpkeSymmetricCipherSuite,
 		MaxNameLength: 0,
@@ -58,57 +68,11 @@ func TestECHConfigEqual(t *testing.T) {
 	}
 }
 
-func TestMarshalBinaryOnlyConfig(t *testing.T) {
-	config := ECHConfig{
-		Version:   DraftTLSESNI16,
-		ConfigID:  1,
-		KEM:       hpke.KEM_P256_HKDF_SHA256,
-		PublicKey: publicKey,
-		CipherSuites: []HpkeSymmetricCipherSuite{
-			{KDF: hpke.KDF_HKDF_SHA256, AEAD: hpke.AEAD_AES128GCM},
-		},
-		MaxNameLength: 0,
-		RawPublicName: []byte("example.com"),
-		RawExtensions: nil,
-	}
-
-	var b1 cryptobyte.Builder
-	if err := config.marshalBinaryOnlyConfig(&b1); err != nil {
-		t.Fatal(err)
-	}
-	bytes1, err := b1.Bytes()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var newConfig ECHConfig
-	if err := newConfig.unmarshalBinaryConfigOnly(bytes1); err != nil {
-		t.Fatal(err)
-	}
-
-	if !config.Equal(&newConfig) {
-		t.Fatal("new one does not equal old one")
-	}
-
-	var b2 cryptobyte.Builder
-	if err := newConfig.marshalBinaryOnlyConfig(&b2); err != nil {
-		t.Fatal(err)
-	}
-	bytes2, err := b2.Bytes()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !bytes.Equal(bytes1, bytes2) {
-		t.Fatal("bytes are not equal")
-	}
-}
-
 func TestECHConfigMarshalBinary(t *testing.T) {
 	config := ECHConfig{
 		Version:   DraftTLSESNI16,
 		ConfigID:  1,
-		KEM:       hpke.KEM_P256_HKDF_SHA256,
+		KEM:       kemConst,
 		PublicKey: publicKey,
 		CipherSuites: []HpkeSymmetricCipherSuite{
 			{KDF: hpke.KDF_HKDF_SHA256, AEAD: hpke.AEAD_AES128GCM},
@@ -147,7 +111,7 @@ func TestECHConfigListMarshalBinary(t *testing.T) {
 		ECHConfig{
 			Version:   DraftTLSESNI16,
 			ConfigID:  1,
-			KEM:       hpke.KEM_P256_HKDF_SHA256,
+			KEM:       kemConst,
 			PublicKey: publicKey,
 			CipherSuites: []HpkeSymmetricCipherSuite{
 				{KDF: hpke.KDF_HKDF_SHA256, AEAD: hpke.AEAD_AES128GCM},
@@ -160,7 +124,7 @@ func TestECHConfigListMarshalBinary(t *testing.T) {
 		ECHConfig{
 			Version:   DraftTLSESNI16,
 			ConfigID:  2,
-			KEM:       hpke.KEM_P256_HKDF_SHA256,
+			KEM:       kemConst,
 			PublicKey: publicKey,
 			CipherSuites: []HpkeSymmetricCipherSuite{
 				{KDF: hpke.KDF_HKDF_SHA256, AEAD: hpke.AEAD_ChaCha20Poly1305},
@@ -224,4 +188,154 @@ func TestUnmarshalECHConfigList(t *testing.T) {
 	if !list.Equal(unmarshaledList) {
 		t.Fatal("unmarshaled list doesn't equal the original one")
 	}
+}
+
+func TestCompatiblityWithStdlib(t *testing.T) {
+	certificate, err := selfSignedCert()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		outerSNI = "outer.example.com"
+		innerSNI = "inner.example.com"
+	)
+
+	echConfig1 := ECHConfig{
+		PublicKey:     publicKey,
+		Version:       DraftTLSESNI16,
+		ConfigID:      1,
+		RawPublicName: []byte(outerSNI),
+		KEM:           hpke.KEM_X25519_HKDF_SHA256,
+		CipherSuites: []HpkeSymmetricCipherSuite{
+			// this kdf is not supported by the stdlib
+			// therefore the tls client will pick echConfig2
+			{KDF: hpke.KDF_HKDF_SHA512, AEAD: hpke.AEAD_AES256GCM},
+		},
+	}
+
+	echConfig2 := ECHConfig{
+		PublicKey:     publicKey,
+		Version:       DraftTLSESNI16,
+		ConfigID:      2,
+		RawPublicName: []byte(outerSNI),
+		KEM:           hpke.KEM_X25519_HKDF_SHA256,
+		CipherSuites: []HpkeSymmetricCipherSuite{
+			{KDF: hpke.KDF_HKDF_SHA256, AEAD: hpke.AEAD_AES128GCM},
+			{KDF: hpke.KDF_HKDF_SHA256, AEAD: hpke.AEAD_AES256GCM},
+			{KDF: hpke.KDF_HKDF_SHA256, AEAD: hpke.AEAD_ChaCha20Poly1305},
+		},
+	}
+
+	var echConfigList ECHConfigList
+	echConfigList = append(echConfigList, echConfig1, echConfig2)
+	echConfigListBytes, err := echConfigList.MarshalBinary()
+
+	echConfigBytes, err := echConfig2.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	privateKeyBytes, err := privateKey.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clientConn, serverConn := net.Pipe()
+
+	clientTLSConn := tls.Client(clientConn, &tls.Config{
+		EncryptedClientHelloConfigList: echConfigListBytes,
+		ServerName:                     innerSNI,
+		InsecureSkipVerify:             true,
+	})
+
+	serverTLSConn := tls.Server(serverConn, &tls.Config{
+		EncryptedClientHelloKeys: []tls.EncryptedClientHelloKey{
+			{Config: echConfigBytes, PrivateKey: privateKeyBytes},
+		},
+		VerifyConnection: func(state tls.ConnectionState) error {
+			if state.ServerName != innerSNI {
+				return fmt.Errorf("expected: %s, found: %s", innerSNI, state.ServerName)
+			}
+			return nil
+		},
+		Certificates: []tls.Certificate{certificate},
+	})
+
+	t.Cleanup(func() {
+		_ = clientTLSConn.Close()
+		_ = serverTLSConn.Close()
+	})
+
+	errc := make(chan error, 2)
+
+	go func() {
+		err := clientTLSConn.Handshake()
+		if err != nil {
+			err = fmt.Errorf("client: %w", err)
+		}
+		errc <- err
+	}()
+
+	go func() {
+		err := serverTLSConn.Handshake()
+		if err != nil {
+			err = fmt.Errorf("server: %w", err)
+		}
+		errc <- err
+	}()
+
+	err = <-errc
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func selfSignedCert() (tls.Certificate, error) {
+	fail := func(err error) (tls.Certificate, error) { return tls.Certificate{}, err }
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return fail(err)
+	}
+
+	// Create a certificate template
+	notBefore := time.Now()
+	notAfter := notBefore.Add(365 * 24 * time.Hour) // Valid for 1 year
+
+	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return fail(err)
+	}
+
+	template := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			Organization: []string{"My Company"},
+		},
+		NotBefore:             notBefore,
+		NotAfter:              notAfter,
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:              []string{"example.org"},
+		BasicConstraintsValid: true,
+	}
+
+	// Self-sign the certificate
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	if err != nil {
+		return fail(err)
+	}
+
+	// Encode the certificate and private key as PEM
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	keyPEM, err := x509.MarshalECPrivateKey(priv)
+	if err != nil {
+		return fail(err)
+	}
+
+	keyPEMBytes := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyPEM})
+
+	// Create a tls.Certificate
+	return tls.X509KeyPair(certPEM, keyPEMBytes)
 }

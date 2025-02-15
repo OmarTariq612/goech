@@ -6,7 +6,10 @@ This is done using public key cryptography, by either having the client preconfi
 
 This library helps with parsing and generating those ECH configurations.
 
-## Example
+## Examples
+
+* [stdlib example](examples/stdlib/main.go)
+* [cfgo example](examples/cfgo/main.go) shows how the library integrates with [cfgo](https://github.com/cloudflare/go) fork.
 
 ```sh
 go get -u github.com/OmarTariq612/goech
