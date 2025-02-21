@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -156,3 +157,8 @@ func selfSignedCert() (tls.Certificate, error) {
 	// Create a tls.Certificate
 	return tls.X509KeyPair(certPEM, keyPEMBytes)
 }
+
+var (
+	_ encoding.BinaryAppender = goech.ECHConfig{}
+	_ encoding.BinaryAppender = (goech.ECHConfigList)(nil)
+)

@@ -15,6 +15,18 @@ func GenerateKeyPair(kem hpke.KEM) (kem.PublicKey, kem.PrivateKey, error) {
 	return kem.Scheme().GenerateKeyPair()
 }
 
+// ECHKeySet represents an ECHConfig and its corresponding private key.
+//
+// Encoding of the ECHKeySet has the format defined below (in TLS syntax).
+// NOTE: The ECH standard does not specify this format.
+//
+//	struct {
+//		opaque PrivateKey<0..2^16-1>;
+//		ECHConfig config<0..2^16-1>;
+//	} ECHKeySet;
+//
+// This encoding is written specfically to match `tls.EXP_UnmarshalECHKeys` encoding of cfgo (the cloudflare fork of go).
+// This is subject to change in the future.
 type ECHKeySet struct {
 	PrivateKey kem.PrivateKey
 	ECHConfig  ECHConfig
@@ -121,6 +133,11 @@ func (key *ECHKeySet) FromBase64(keySetBase64 string) error {
 	return key.UnmarshalBinary(data)
 }
 
+// ECHKeySetList is a sequence of ECHKeySet.
+//
+// NOTE: The ECH standard does not specify the encoding of this type
+// This encoding is written specfically to match `tls.EXP_UnmarshalECHKeys` encoding of cfgo (the cloudflare fork of go).
+// This is subject to change in the future.
 type ECHKeySetList []ECHKeySet
 
 func (keysets ECHKeySetList) Equal(other ECHKeySetList) bool {

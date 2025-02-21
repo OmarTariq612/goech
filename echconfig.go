@@ -21,14 +21,47 @@ func (cipherSuite HpkeSymmetricCipherSuite) String() string {
 	return fmt.Sprintf("{(cipher) kdf: %s, aead: %s}", KDFMapping[cipherSuite.KDF], AEADMapping[cipherSuite.AEAD])
 }
 
+// ECHConfig represents an Encrypted Client Hello configuration.
+//
+// Encoding is done according to the ECHConfig struct defined in the draft-ietf-tls-esni-22.
+// It also matches `tls.Config.EncryptedClientHelloKeys.Config` in the Go standard library.
 type ECHConfig struct {
-	PublicKey     kem.PublicKey
-	Version       uint16
-	ConfigID      uint8
-	RawPublicName []byte
-	KEM           hpke.KEM
-	CipherSuites  []HpkeSymmetricCipherSuite
+	// The version of the ECHConfig struct.
+	Version uint16
+
+	// A one-byte identifier for the given HPKE key configuration.
+	// This is used by clients to indicate the key used for ClientHello encryption.
+	//
+	// Section 4.1 describes how client-facing servers allocate this value.
+	ConfigID uint8
+
+	// The HPKE KEM identifier corresponding to public_key.
+	// Clients MUST ignore any ECHConfig structure with a key using a KEM they do not support
+	KEM hpke.KEM
+
+	// The HPKE public key used by the client to encrypt ClientHelloInner.
+	PublicKey kem.PublicKey
+
+	// The list of HPKE KDF and AEAD identifier pairs clients can use for encrypting ClientHelloInner.
+	//
+	// See Section 6.1 for how clients choose from this list.
+	CipherSuites []HpkeSymmetricCipherSuite
+
+	// The longest name of a backend server, if known. If not known, this value can be set to zero.
+	//
+	// It is used to compute padding (Section 6.1.3) and does not constrain server name lengths.
+	// Names may exceed this length if, e.g., the server uses wildcard names or added new names to the anonymity set.
 	MaxNameLength uint8
+
+	// The DNS name of the client-facing server, i.e., the entity trusted to update the ECH configuration.
+	//
+	// This is used to correct misconfigured clients, as described in Section 6.1.6.
+	RawPublicName []byte
+
+	// A list of ECHConfigExtension values that the client must take into consideration when generating a ClientHello message.
+	//
+	// Each ECHConfigExtension has a 2-octet type and opaque data value,
+	// where the data value is encoded with a 2-octet integer representing the length of the data, in network byte order.
 	RawExtensions []byte
 }
 
@@ -211,6 +244,11 @@ func (ech *ECHConfig) FromBase64(echConfigBase64 string) error {
 	return ech.UnmarshalBinary(data)
 }
 
+// The ECHConfigList structure contains one or more ECHConfig structures in decreasing order of preference.
+// This allows a server to support multiple versions of ECH and multiple sets of ECH parameters.
+//
+// Encoding is done according to the ECHConfigList type defined in the draft-ietf-tls-esni-22.
+// It also matches `tls.Config.EncryptedClientHelloConfigList` in the Go standard library.
 type ECHConfigList []ECHConfig
 
 func (configs ECHConfigList) Equal(other ECHConfigList) bool {

@@ -1,3 +1,5 @@
+[![Go Reference](https://pkg.go.dev/badge/github.com/OmarTariq612/goech.svg)](https://pkg.go.dev/github.com/OmarTariq612/goech)
+
 # goech
 
 `Encrypted Client Hello (ECH)` is an extension to the TLS version 1.3, it prevents leaking the `Server Name Indication (SNI)` (and other fields in the `ClientHello` message).
@@ -63,7 +65,7 @@ func main() {
 
 ## REF
 
-* https://datatracker.ietf.org/doc/html/draft-ietf-tls-esni-18
+* https://datatracker.ietf.org/doc/html/draft-ietf-tls-esni-22
 
 * https://datatracker.ietf.org/doc/html/draft-ietf-tls-svcb-ech-01
 
